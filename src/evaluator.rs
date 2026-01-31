@@ -1602,51 +1602,13 @@ fn evaluate_packs_with_allowlists(
                     );
                 }
                 Some(crate::packs::core::filesystem::RmParseDecision::Rewrite(info)) => {
-                    // Rewrite decision: detect trash binary and generate rewritten command
-                    let trash_result = crate::trash::detect_trash_binary(None);
-                    match trash_result {
-                        crate::trash::TrashDetectionResult::Found(ref trash_binary) => {
-                            if let Some(rewrite_info) = crate::trash::rewrite_rm_to_trash(
-                                original_command,
-                                &info.paths,
-                                trash_binary,
-                                info.has_sudo,
-                            ) {
-                                let span = info.span.as_ref().map(|span| MatchSpan {
-                                    start: span.start,
-                                    end: span.end,
-                                });
-                                let mapped_span = span.and_then(|span| {
-                                    map_span_with_offset(span, normalized_offset, original_len)
-                                });
-                                let reason = format!(
-                                    "Rewriting rm to {} for safer file deletion",
-                                    trash_binary.command
-                                );
-                                return EvaluationResult::rewrite_rm_to_trash(
-                                    original_command,
-                                    &rewrite_info.rewritten,
-                                    &reason,
-                                    info.paths.clone(),
-                                    info.has_sudo,
-                                    info.severity,
-                                    mapped_span,
-                                );
-                            }
-                            // Rewrite failed (e.g., piped input) - fallback to deny
-                            return EvaluationResult::denied_by_pack_pattern(
-                                pack_id,
-                                "rm-recursive",
-                                "Recursive rm cannot be safely rewritten to trash",
-                                Some(
-                                    "Command uses piped input, find -exec, or xargs which cannot be rewritten.",
-                                ),
-                                info.severity,
-                                &[],
-                            );
-                        }
-                        crate::trash::TrashDetectionResult::NotFound { install_hint, .. } => {
-                            // No trash binary found - use platform-specific install hint
+                    use crate::trash::{
+                        TrashDetectionResult, detect_trash_binary, rewrite_rm_to_trash,
+                    };
+
+                    let trash_binary = match detect_trash_binary(None) {
+                        TrashDetectionResult::Found(binary) => binary,
+                        TrashDetectionResult::NotFound { install_hint, .. } => {
                             let suggestion = format!("No trash binary found. {install_hint}");
                             return EvaluationResult::denied_by_pack_pattern(
                                 pack_id,
@@ -1657,7 +1619,50 @@ fn evaluate_packs_with_allowlists(
                                 &[],
                             );
                         }
-                    }
+                    };
+
+                    let Some(rewrite_info) = rewrite_rm_to_trash(
+                        original_command,
+                        &info.paths,
+                        &trash_binary,
+                        info.has_sudo,
+                    ) else {
+                        return EvaluationResult::denied_by_pack_pattern(
+                            pack_id,
+                            "rm-recursive",
+                            "Recursive rm cannot be safely rewritten to trash",
+                            Some(
+                                "Command uses piped input, find -exec, or xargs which cannot be rewritten.",
+                            ),
+                            info.severity,
+                            &[],
+                        );
+                    };
+
+                    let mapped_span = info.span.as_ref().and_then(|span| {
+                        map_span_with_offset(
+                            MatchSpan {
+                                start: span.start,
+                                end: span.end,
+                            },
+                            normalized_offset,
+                            original_len,
+                        )
+                    });
+                    let reason = format!(
+                        "Rewriting rm to {} for safer file deletion",
+                        trash_binary.command
+                    );
+
+                    return EvaluationResult::rewrite_rm_to_trash(
+                        original_command,
+                        &rewrite_info.rewritten,
+                        &reason,
+                        info.paths.clone(),
+                        info.has_sudo,
+                        info.severity,
+                        mapped_span,
+                    );
                 }
             }
         } else {
