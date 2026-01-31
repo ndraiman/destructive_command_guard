@@ -386,12 +386,33 @@ fn map_span_with_offset(
 }
 
 /// The decision made by the evaluator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvaluationDecision {
     /// Command is allowed to execute.
     Allow,
     /// Command is blocked from executing.
     Deny,
+    /// Command should be rewritten (e.g., rm → trash).
+    Rewrite(RewriteDecision),
+}
+
+/// Information for command rewriting (e.g., rm -rf → trash).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RewriteDecision {
+    /// The original command that was matched.
+    pub original: String,
+    /// The rewritten command to execute instead.
+    pub rewritten_command: String,
+    /// Human-readable reason for the rewrite.
+    pub reason: String,
+    /// Paths to be operated on.
+    pub paths: Vec<String>,
+    /// Whether the original command had sudo prefix.
+    pub has_sudo: bool,
+    /// Severity of the original match (for logging).
+    pub severity: crate::packs::Severity,
+    /// Byte span of the match.
+    pub matched_span: Option<MatchSpan>,
 }
 
 /// Byte span of a match within the evaluated command string.
@@ -736,18 +757,63 @@ impl EvaluationResult {
         }
     }
 
+    /// Create a "rewrite" result for rm-to-trash conversion.
+    #[must_use]
+    pub fn rewrite_rm_to_trash(
+        original: &str,
+        rewritten_command: &str,
+        reason: &str,
+        paths: Vec<String>,
+        has_sudo: bool,
+        severity: crate::packs::Severity,
+        matched_span: Option<MatchSpan>,
+    ) -> Self {
+        Self {
+            decision: EvaluationDecision::Rewrite(RewriteDecision {
+                original: original.to_string(),
+                rewritten_command: rewritten_command.to_string(),
+                reason: reason.to_string(),
+                paths,
+                has_sudo,
+                severity,
+                matched_span,
+            }),
+            pattern_info: None,
+            allowlist_override: None,
+            effective_mode: None,
+            skipped_due_to_budget: false,
+            branch_context: None,
+        }
+    }
+
     /// Check if the command was allowed.
     #[inline]
     #[must_use]
     pub fn is_allowed(&self) -> bool {
-        self.decision == EvaluationDecision::Allow
+        matches!(self.decision, EvaluationDecision::Allow)
     }
 
     /// Check if the command was denied.
     #[inline]
     #[must_use]
     pub fn is_denied(&self) -> bool {
-        self.decision == EvaluationDecision::Deny
+        matches!(self.decision, EvaluationDecision::Deny)
+    }
+
+    /// Check if the command should be rewritten.
+    #[inline]
+    #[must_use]
+    pub fn is_rewrite(&self) -> bool {
+        matches!(self.decision, EvaluationDecision::Rewrite(_))
+    }
+
+    /// Get the rewrite decision if this is a rewrite result.
+    #[must_use]
+    pub fn rewrite_decision(&self) -> Option<&RewriteDecision> {
+        match &self.decision {
+            EvaluationDecision::Rewrite(d) => Some(d),
+            _ => None,
+        }
     }
 
     /// Get the reason for denial (if denied).
@@ -1423,8 +1489,11 @@ fn evaluate_packs_with_allowlists(
     let has_filesystem_pack = candidate_packs
         .iter()
         .any(|(pack_id, _)| pack_id.as_str() == "core.filesystem");
-    let rm_parse = has_filesystem_pack
-        .then(|| crate::packs::core::filesystem::parse_rm_command(command_for_packs));
+    // Check if trash rewriting is enabled (loads config once, uses cached value after)
+    let trash_enabled = crate::config::Config::load().trash.enabled;
+    let rm_parse = has_filesystem_pack.then(|| {
+        crate::packs::core::filesystem::parse_rm_command_with_trash(command_for_packs, trash_enabled)
+    });
 
     let normalized_offset = compute_normalized_offset(command_for_match, normalized);
     let original_len = original_command.len();
@@ -1526,6 +1595,48 @@ fn evaluate_packs_with_allowlists(
                         None,
                         hit.severity,
                         &[], // fast_match path doesn't have suggestions
+                    );
+                }
+                Some(crate::packs::core::filesystem::RmParseDecision::Rewrite(info)) => {
+                    // Rewrite decision: detect trash binary and generate rewritten command
+                    let trash_result = crate::trash::detect_trash_binary(None);
+                    if let Some(trash_binary) = trash_result.binary() {
+                        if let Some(rewrite_info) = crate::trash::rewrite_rm_to_trash(
+                            original_command,
+                            &info.paths,
+                            trash_binary,
+                            info.has_sudo,
+                        ) {
+                            let span = info.span.as_ref().map(|span| MatchSpan {
+                                start: span.start,
+                                end: span.end,
+                            });
+                            let mapped_span =
+                                span.and_then(|span| map_span_with_offset(span, normalized_offset, original_len));
+                            let reason = format!(
+                                "Rewriting rm to {} for safer file deletion",
+                                trash_binary.command
+                            );
+                            return EvaluationResult::rewrite_rm_to_trash(
+                                original_command,
+                                &rewrite_info.rewritten,
+                                &reason,
+                                info.paths.clone(),
+                                info.has_sudo,
+                                info.severity,
+                                mapped_span,
+                            );
+                        }
+                    }
+                    // Fallback to deny if trash binary not found or rewrite failed
+                    // Use denied_by_pack_pattern (span not used in fallback)
+                    return EvaluationResult::denied_by_pack_pattern(
+                        pack_id,
+                        "rm-recursive",
+                        "Recursive rm without trash binary available",
+                        Some("No trash binary found. Install 'trash-cli' or 'gio' to enable rm → trash rewriting."),
+                        info.severity,
+                        &[],
                     );
                 }
             }

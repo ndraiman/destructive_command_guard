@@ -84,6 +84,10 @@ pub struct Config {
     /// Project-specific configurations (keyed by absolute path).
     #[serde(default)]
     pub projects: std::collections::HashMap<String, ProjectConfig>,
+
+    /// Trash-based rm rewriting configuration.
+    #[serde(default)]
+    pub trash: TrashConfig,
 }
 
 // -----------------------------------------------------------------------------
@@ -118,6 +122,7 @@ struct ConfigLayer {
     git_awareness: Option<GitAwarenessConfigLayer>,
     agents: Option<AgentsConfig>,
     projects: Option<std::collections::HashMap<String, ProjectConfig>>,
+    trash: Option<TrashConfigLayer>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -207,6 +212,14 @@ struct GitAwarenessConfigLayer {
     relaxed_strictness: Option<StrictnessLevel>,
     default_strictness: Option<StrictnessLevel>,
     warn_if_not_git: Option<bool>,
+}
+
+/// Trash rewriting configuration layer for config file parsing.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct TrashConfigLayer {
+    enabled: Option<bool>,
+    mode: Option<crate::trash::TrashMode>,
+    custom_command: Option<String>,
 }
 
 fn expand_tilde_path(value: &str) -> (PathBuf, bool) {
@@ -476,6 +489,85 @@ impl Default for ConfidenceConfig {
             enabled: false,
             warn_threshold: crate::confidence::DEFAULT_WARN_THRESHOLD,
             protect_critical: true,
+        }
+    }
+}
+
+/// Trash-based rm rewriting configuration.
+///
+/// When enabled, destructive `rm -rf` commands can be rewritten to use a trash
+/// utility instead of permanently deleting files. This provides a safety net
+/// by moving files to the system trash rather than immediate deletion.
+///
+/// # Example Configuration (TOML)
+///
+/// ```toml
+/// [trash]
+/// enabled = true
+/// mode = "rewrite"           # or "deny" to disable rewriting
+/// custom_command = ""        # override platform detection
+/// ```
+///
+/// # Platform Detection
+///
+/// When `custom_command` is empty, the trash binary is auto-detected:
+/// - macOS: `trash` (from Homebrew's trash package)
+/// - Linux: `gio trash` (GNOME), `trash-put` (trash-cli), `kioclient5 move` (KDE)
+///
+/// The `DCG_TRASH_COMMAND` environment variable overrides all detection.
+///
+/// # Behavior
+///
+/// When `mode = "rewrite"` and a trash binary is available:
+/// - `rm -rf /path/to/dir` becomes `trash /path/to/dir`
+/// - Critical severity patterns (rm -rf /, rm -rf ~) are ALWAYS denied
+/// - Unsafe patterns (xargs rm, find -exec rm) are ALWAYS denied
+///
+/// When trash rewriting is not possible, the command falls back to deny.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrashConfig {
+    /// Enable trash-based rm rewriting.
+    ///
+    /// When true, non-critical `rm -rf` commands may be rewritten to use
+    /// the system trash instead of permanent deletion.
+    ///
+    /// Default: false (opt-in for safety)
+    pub enabled: bool,
+
+    /// Rewrite mode.
+    ///
+    /// - `rewrite`: Rewrite rm commands to trash when possible
+    /// - `deny`: Always deny rm commands (default dcg behavior)
+    ///
+    /// Default: "rewrite"
+    #[serde(default)]
+    pub mode: crate::trash::TrashMode,
+
+    /// Custom trash command override.
+    ///
+    /// When set, overrides platform-specific trash binary detection.
+    /// Can include arguments (e.g., "gio trash").
+    ///
+    /// The `DCG_TRASH_COMMAND` environment variable takes precedence.
+    #[serde(default)]
+    pub custom_command: String,
+}
+
+impl TrashConfig {
+    /// Check if trash rewriting is enabled and in rewrite mode.
+    #[must_use]
+    pub fn should_rewrite(&self) -> bool {
+        self.enabled && self.mode == crate::trash::TrashMode::Rewrite
+    }
+
+    /// Get the custom command if set.
+    #[must_use]
+    pub fn custom_command_opt(&self) -> Option<&str> {
+        if self.custom_command.trim().is_empty() {
+            None
+        } else {
+            Some(&self.custom_command)
         }
     }
 }
@@ -2581,6 +2673,10 @@ impl Config {
             self.merge_agents_layer(agents);
         }
 
+        if let Some(trash) = other.trash {
+            self.merge_trash_layer(trash);
+        }
+
         // Merge project configs
         if let Some(projects) = other.projects {
             self.projects.extend(projects);
@@ -2817,6 +2913,18 @@ impl Config {
         self.agents.default = agents.default;
         // Merge agent-specific profiles
         self.agents.profiles.extend(agents.profiles);
+    }
+
+    fn merge_trash_layer(&mut self, trash: TrashConfigLayer) {
+        if let Some(enabled) = trash.enabled {
+            self.trash.enabled = enabled;
+        }
+        if let Some(mode) = trash.mode {
+            self.trash.mode = mode;
+        }
+        if let Some(custom_command) = trash.custom_command {
+            self.trash.custom_command = custom_command;
+        }
     }
 
     /// Apply environment variable overrides.
@@ -3185,6 +3293,7 @@ impl Config {
             agents: AgentsConfig::default(),
             projects: std::collections::HashMap::new(),
             interactive: crate::interactive::InteractiveConfig::default(),
+            trash: TrashConfig::default(),
         }
     }
 
@@ -4168,7 +4277,6 @@ enabled = ["database.postgresql"]
 
                 let result =
                     evaluate_command(command, &config, &keyword_refs, &overrides, &allowlists);
-                results.push(result.decision);
 
                 // Each result should match the expected decision
                 assert_eq!(
@@ -4176,6 +4284,8 @@ enabled = ["database.postgresql"]
                     std::mem::discriminant(expected_decision),
                     "Command '{command}' with toggles ({highlight:?}, {explanations:?}) should have expected decision"
                 );
+
+                results.push(result.decision);
             }
 
             // All results for this command should be identical

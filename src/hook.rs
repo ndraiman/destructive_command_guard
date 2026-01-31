@@ -602,6 +602,102 @@ pub fn output_warning(
     );
 }
 
+/// Output structure for rewriting a command (with updatedInput).
+#[derive(Debug, Serialize)]
+pub struct RewriteHookOutput<'a> {
+    /// Hook-specific output with the decision.
+    #[serde(rename = "hookSpecificOutput")]
+    pub hook_specific_output: RewriteHookSpecificOutput<'a>,
+}
+
+/// Hook-specific output for rewrite decision.
+#[derive(Debug, Serialize)]
+pub struct RewriteHookSpecificOutput<'a> {
+    /// Always "`PreToolUse`" for this hook.
+    #[serde(rename = "hookEventName")]
+    pub hook_event_name: &'static str,
+
+    /// The permission decision: "allow" for rewrites.
+    #[serde(rename = "permissionDecision")]
+    pub permission_decision: &'static str,
+
+    /// Human-readable explanation of the rewrite.
+    #[serde(rename = "permissionDecisionReason")]
+    pub permission_decision_reason: Cow<'a, str>,
+
+    /// The rewritten tool input.
+    #[serde(rename = "updatedInput")]
+    pub updated_input: UpdatedToolInput<'a>,
+}
+
+/// The rewritten tool input for command rewrites.
+#[derive(Debug, Serialize)]
+pub struct UpdatedToolInput<'a> {
+    /// The rewritten command string.
+    pub command: Cow<'a, str>,
+}
+
+/// Output a rewrite response to stdout (JSON for hook protocol).
+///
+/// This allows the command but rewrites it to a safer alternative (e.g., `rm -rf` → `trash`).
+#[cold]
+#[inline(never)]
+pub fn output_rewrite(original: &str, rewritten: &str, reason: &str, paths: &[String]) {
+    let stderr = io::stderr();
+    let mut handle = stderr.lock();
+
+    let theme = auto_theme();
+    let cyan = if theme.colors_enabled { "\x1b[36m" } else { "" };
+    let green = if theme.colors_enabled { "\x1b[32m" } else { "" };
+    let dim = if theme.colors_enabled { "\x1b[90m" } else { "" };
+    let reset = if theme.colors_enabled { "\x1b[0m" } else { "" };
+
+    // Print rewrite notice to stderr (visible to user)
+    let _ = writeln!(handle);
+    let _ = writeln!(
+        handle,
+        "{green}[dcg rewrite]{reset} {reason}",
+    );
+    let _ = writeln!(
+        handle,
+        "  {dim}Original:{reset}  {cyan}{original}{reset}",
+    );
+    let _ = writeln!(
+        handle,
+        "  {dim}Rewritten:{reset} {cyan}{rewritten}{reset}",
+    );
+    if !paths.is_empty() {
+        let _ = writeln!(
+            handle,
+            "  {dim}Paths:{reset}     {}",
+            paths.join(", ")
+        );
+    }
+    let _ = writeln!(handle);
+
+    // Build JSON response for hook protocol (stdout)
+    let message = format!(
+        "dcg rewrote destructive command to safer alternative: {original} → {rewritten}"
+    );
+
+    let output = RewriteHookOutput {
+        hook_specific_output: RewriteHookSpecificOutput {
+            hook_event_name: "PreToolUse",
+            permission_decision: "allow",
+            permission_decision_reason: Cow::Owned(message),
+            updated_input: UpdatedToolInput {
+                command: Cow::Borrowed(rewritten),
+            },
+        },
+    };
+
+    // Write JSON to stdout for the hook protocol
+    let stdout = io::stdout();
+    let mut stdout_handle = stdout.lock();
+    let _ = serde_json::to_writer(&mut stdout_handle, &output);
+    let _ = writeln!(stdout_handle);
+}
+
 /// Log a blocked command to a file (if logging is enabled).
 ///
 /// # Errors

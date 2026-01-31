@@ -786,6 +786,7 @@ impl EvalSnapshot {
         let decision = match result.decision {
             EvaluationDecision::Allow => "allow",
             EvaluationDecision::Deny => "deny",
+            EvaluationDecision::Rewrite(_) => "rewrite",
         };
 
         let effective_mode = result.effective_mode.map(|m| match m {

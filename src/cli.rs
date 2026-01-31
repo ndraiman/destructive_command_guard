@@ -470,6 +470,21 @@ pub enum Command {
     /// ```
     #[command(name = "mcp-server")]
     McpServer,
+
+    /// Check trash binary detection for rm→trash rewriting
+    ///
+    /// Shows the detected trash binary that would be used for rewriting
+    /// `rm -rf` commands to safer `trash` commands.
+    ///
+    /// Exit codes:
+    /// - 0: Trash binary found
+    /// - 1: No trash binary found
+    #[command(name = "trash-check")]
+    TrashCheck {
+        /// Output format (pretty or json)
+        #[arg(long, short = 'f', value_enum, default_value = "pretty", env = "DCG_FORMAT")]
+        format: TrashCheckFormat,
+    },
 }
 
 /// `dcg hook` command arguments.
@@ -1519,6 +1534,18 @@ pub enum DoctorFormat {
     Json,
 }
 
+/// Output format for trash-check command
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum TrashCheckFormat {
+    /// Human-readable colored output
+    #[default]
+    #[value(alias = "text")]
+    Pretty,
+    /// Structured JSON output for automation
+    #[value(alias = "sarif")]
+    Json,
+}
+
 /// Pack subcommand actions
 #[derive(Subcommand, Debug)]
 pub enum PackAction {
@@ -1888,6 +1915,15 @@ pub fn run_command(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::McpServer) => {
             crate::mcp::run_mcp_server()?;
         }
+        Some(Command::TrashCheck { format }) => {
+            let robot_mode = cli.robot || std::env::var("DCG_ROBOT").is_ok();
+            let effective_format = if robot_mode {
+                TrashCheckFormat::Json
+            } else {
+                format
+            };
+            handle_trash_check(&config, effective_format);
+        }
         None => {
             // No subcommand - run in hook mode (default behavior)
             // This is handled by main.rs
@@ -2197,6 +2233,13 @@ fn evaluate_batch_line(
                 error: None,
             }
         }
+        EvaluationDecision::Rewrite(_) => BatchHookOutput {
+            index,
+            decision: "rewrite",
+            rule_id: Some("core.filesystem:rm-rf-general".to_string()),
+            pack_id: Some("core.filesystem".to_string()),
+            error: None,
+        },
     }
 }
 
@@ -3296,9 +3339,31 @@ fn test_command(
                     agent: Some(agent_info.clone()),
                 }
             }
+            EvaluationDecision::Rewrite(ref rewrite_info) => {
+                TestOutput {
+                    schema_version: TEST_OUTPUT_SCHEMA_VERSION,
+                    dcg_version: env!("CARGO_PKG_VERSION").to_string(),
+                    robot_mode,
+                    command: command.to_string(),
+                    decision: "rewrite".to_string(),
+                    rule_id: Some("core.filesystem:rm-rf-general".to_string()),
+                    pack_id: Some("core.filesystem".to_string()),
+                    pattern_name: Some("rm-rf-general".to_string()),
+                    reason: Some("rm -rf rewritten to use trash".to_string()),
+                    explanation: Some(format!(
+                        "Command rewritten to: trash {}",
+                        rewrite_info.paths.join(" ")
+                    )),
+                    source: Some("pack".to_string()),
+                    matched_span: rewrite_info.matched_span.as_ref().map(|s| (s.start, s.end)),
+                    severity: Some("high".to_string()),
+                    allowlist: None,
+                    agent: Some(agent_info.clone()),
+                }
+            }
         };
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
-        return result.decision == EvaluationDecision::Deny;
+        return result.is_denied();
     }
 
     // Pretty output (default)
@@ -3502,6 +3567,16 @@ fn test_command(
             }
 
             println!("{result_line}");
+        }
+        EvaluationDecision::Rewrite(ref rewrite_info) => {
+            println!("Result: REWRITE");
+            println!("Pack: core.filesystem");
+            println!("Pattern: rm-rf-general");
+            println!("Reason: rm -rf will be rewritten to use trash");
+            println!("Paths: {}", rewrite_info.paths.join(", "));
+            if rewrite_info.has_sudo {
+                println!("Note: sudo prefix will be preserved");
+            }
         }
     }
 
@@ -4907,6 +4982,7 @@ fn explain_rich(trace: &crate::trace::ExplainTrace) {
     let (decision_icon, decision_color, decision_text) = match trace.decision {
         EvaluationDecision::Allow => ("✓", "green", "ALLOW"),
         EvaluationDecision::Deny => ("✗", "red", "DENY"),
+        EvaluationDecision::Rewrite(_) => ("↻", "yellow", "REWRITE"),
     };
     con.print(&format!(
         "[bold]Decision:[/] [{decision_color} bold]{decision_icon} {decision_text}[/]"
@@ -5118,6 +5194,7 @@ fn explain_rich(trace: &crate::trace::ExplainTrace) {
                 TraceDetails::PolicyDecision { decision, .. } => match decision {
                     EvaluationDecision::Allow => "[green]allow[/]".to_string(),
                     EvaluationDecision::Deny => "[red]deny[/]".to_string(),
+                    EvaluationDecision::Rewrite(_) => "[yellow]rewrite[/]".to_string(),
                 },
                 _ => String::new(),
             };
@@ -5494,6 +5571,7 @@ fn run_single_corpus_test(
     let actual = match result.decision {
         EvaluationDecision::Allow => "allow",
         EvaluationDecision::Deny => "deny",
+        EvaluationDecision::Rewrite(_) => "rewrite",
     };
 
     // Extract pattern info
@@ -7368,6 +7446,109 @@ fn doctor(fix: bool, format: DoctorFormat) {
             }
         }
         DoctorFormat::Json => doctor_json(fix),
+    }
+}
+
+/// Check trash binary detection for rm→trash rewriting.
+fn handle_trash_check(config: &Config, format: TrashCheckFormat) {
+    use colored::Colorize;
+    use crate::trash::{detect_trash_binary, TrashSource};
+
+    // Check if trash rewriting is enabled in config
+    let enabled = config.trash.enabled;
+
+    // Detect trash binary with custom command override
+    let custom_cmd = if config.trash.custom_command.is_empty() {
+        None
+    } else {
+        Some(config.trash.custom_command.as_str())
+    };
+    let result = detect_trash_binary(custom_cmd);
+
+    match format {
+        TrashCheckFormat::Pretty => {
+            println!("{}", "dcg trash-check".green().bold());
+            println!();
+
+            // Config status
+            print!("Trash rewriting: ");
+            if enabled {
+                println!("{}", "ENABLED".green());
+            } else {
+                println!("{}", "DISABLED".yellow());
+                println!("  {} To enable, add to your dcg.toml:", "hint:".bright_black());
+                println!("  {}   [trash]", " ".bright_black());
+                println!("  {}   enabled = true", " ".bright_black());
+            }
+            println!();
+
+            // Binary detection
+            print!("Trash binary: ");
+            if let Some(binary) = result.binary() {
+                println!("{}", "FOUND".green());
+                println!("  Command:     {}", binary.command.cyan());
+                if !binary.args.is_empty() {
+                    println!("  Args:        {}", binary.args.join(" ").cyan());
+                }
+                println!("  Description: {}", binary.description);
+                println!("  Source:      {}", match binary.source {
+                    TrashSource::EnvVar => "DCG_TRASH_COMMAND env var",
+                    TrashSource::Config => "config custom_command",
+                    TrashSource::PlatformDetection => "platform auto-detection",
+                });
+
+                // Show example rewrite
+                println!();
+                println!("Example rewrite:");
+                println!("  {} rm -rf ./foo", "Original:".bright_black());
+                let example_paths = ["./foo"];
+                let rewritten = binary.format_command(&example_paths);
+                println!("  {} {}", "Rewritten:".bright_black(), rewritten.green());
+            } else {
+                println!("{}", "NOT FOUND".red());
+                println!();
+                println!("  {} No trash binary detected on this system.", "error:".red());
+                println!("  Install a trash CLI for safer deletions:");
+                println!();
+                #[cfg(target_os = "macos")]
+                {
+                    println!("    {} brew install trash", "macOS:".bright_black());
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    println!("    {} sudo apt install trash-cli", "Debian/Ubuntu:".bright_black());
+                    println!("    {} sudo dnf install trash-cli", "Fedora:".bright_black());
+                }
+                println!();
+                println!("  Or set a custom command:");
+                println!("    {} DCG_TRASH_COMMAND=\"my-trash-cmd\"", "env:".bright_black());
+                println!("    {} custom_command = \"my-trash-cmd\"", "config:".bright_black());
+
+                // Exit with error code if no binary found
+                std::process::exit(1);
+            }
+        }
+        TrashCheckFormat::Json => {
+            let json_output = serde_json::json!({
+                "enabled": enabled,
+                "binary_found": result.is_found(),
+                "binary": result.binary().map(|b| serde_json::json!({
+                    "command": b.command,
+                    "args": b.args,
+                    "description": b.description,
+                    "source": match b.source {
+                        TrashSource::EnvVar => "env_var",
+                        TrashSource::Config => "config",
+                        TrashSource::PlatformDetection => "platform_detection",
+                    },
+                })),
+            });
+            println!("{}", serde_json::to_string_pretty(&json_output).unwrap());
+
+            if !result.is_found() {
+                std::process::exit(1);
+            }
+        }
     }
 }
 

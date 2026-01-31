@@ -71,6 +71,11 @@ pub enum AllowedReason {
     },
     /// Evaluation was skipped due to budget constraints (fail-open).
     BudgetExhausted,
+    /// Command was rewritten (e.g., rm → trash).
+    Rewritten {
+        /// Paths that will be moved to trash.
+        paths: Vec<String>,
+    },
 }
 
 impl TestResultBox {
@@ -79,7 +84,7 @@ impl TestResultBox {
     pub fn from_evaluation(command: impl Into<String>, eval: &EvaluationResult) -> Self {
         let command = command.into();
 
-        let result = match eval.decision {
+        let result = match &eval.decision {
             EvaluationDecision::Deny => {
                 let pattern_info = eval.pattern_info.as_ref();
                 TestOutcome::Blocked {
@@ -109,6 +114,14 @@ impl TestResultBox {
                     TestOutcome::Allowed {
                         reason: AllowedReason::NoPatternMatch,
                     }
+                }
+            }
+            EvaluationDecision::Rewrite(rewrite_info) => {
+                // Rewrite is treated as allowed with a note
+                TestOutcome::Allowed {
+                    reason: AllowedReason::Rewritten {
+                        paths: rewrite_info.paths.clone(),
+                    },
                 }
             }
         };
@@ -357,6 +370,10 @@ impl TestResultBox {
                             "  Reason:     Evaluation budget exhausted (fail-open)"
                         );
                     }
+                    AllowedReason::Rewritten { paths } => {
+                        let _ = writeln!(output, "  Reason:     Rewritten to trash command");
+                        let _ = writeln!(output, "  Paths:      {}", paths.join(", "));
+                    }
                 }
             }
         }
@@ -483,6 +500,22 @@ impl TestResultBox {
                             &color_code,
                         );
                     }
+                    AllowedReason::Rewritten { paths } => {
+                        self.render_unicode_row(
+                            &mut output,
+                            "Reason:",
+                            "Rewritten to trash command",
+                            width,
+                            &color_code,
+                        );
+                        self.render_unicode_row(
+                            &mut output,
+                            "Paths:",
+                            &paths.join(", "),
+                            width,
+                            &color_code,
+                        );
+                    }
                 }
             }
         }
@@ -604,6 +637,15 @@ impl TestResultBox {
                             width,
                         );
                     }
+                    AllowedReason::Rewritten { paths } => {
+                        self.render_ascii_row(
+                            &mut output,
+                            "Reason:",
+                            "Rewritten to trash command",
+                            width,
+                        );
+                        self.render_ascii_row(&mut output, "Paths:", &paths.join(", "), width);
+                    }
                 }
             }
         }
@@ -684,6 +726,10 @@ impl TestResultBox {
                             output,
                             "  Reason:     Evaluation budget exhausted (fail-open)"
                         );
+                    }
+                    AllowedReason::Rewritten { paths } => {
+                        let _ = writeln!(output, "  Reason:     Rewritten to trash command");
+                        let _ = writeln!(output, "  Paths:      {}", paths.join(", "));
                     }
                 }
             }

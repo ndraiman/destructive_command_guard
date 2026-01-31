@@ -90,6 +90,7 @@ pub mod stats;
 pub mod suggest;
 pub mod suggestions;
 pub mod trace;
+pub mod trash;
 pub mod update;
 
 // Re-export commonly used types
@@ -111,7 +112,10 @@ pub use exit_codes::{
     EXIT_CONFIG_ERROR, EXIT_DENIED, EXIT_IO_ERROR, EXIT_PARSE_ERROR, EXIT_SUCCESS, EXIT_WARNING,
     ToExitCode, exit_with, to_exit_code,
 };
-pub use hook::{HookInput, HookOutput, HookResult, HookSpecificOutput};
+pub use hook::{
+    HookInput, HookOutput, HookResult, HookSpecificOutput, RewriteHookOutput,
+    RewriteHookSpecificOutput, UpdatedToolInput, output_rewrite,
+};
 pub use packs::external::{ExternalPack, parse_pack_file, parse_pack_string};
 pub use packs::{Pack, PackId, PackRegistry, PatternSuggestion, Platform};
 pub use pending_exceptions::{
@@ -154,6 +158,12 @@ pub use highlight::{
     HighlightSpan, HighlightedCommand, configure_colors as configure_highlight_colors,
     format_highlighted_command, format_highlighted_command_auto, format_highlighted_command_multi,
     should_use_color,
+};
+
+// Re-export trash types for rm-to-trash rewriting
+pub use trash::{
+    RewriteInfo, TrashBinary, TrashDetectionResult, TrashMode, TrashSource,
+    can_safely_rewrite, detect_trash_binary, has_sudo_prefix, rewrite_rm_to_trash,
 };
 
 // Re-export suggestion types

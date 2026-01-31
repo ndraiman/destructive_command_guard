@@ -492,8 +492,8 @@ impl SimulateDecision {
     /// Convert from evaluation result to simulation decision.
     #[inline]
     #[must_use]
-    pub const fn from_evaluation(result: &EvaluationResult) -> Self {
-        match result.decision {
+    pub fn from_evaluation(result: &EvaluationResult) -> Self {
+        match &result.decision {
             EvaluationDecision::Allow => Self::Allow,
             EvaluationDecision::Deny => {
                 // Check effective_mode for warn vs deny distinction
@@ -503,6 +503,7 @@ impl SimulateDecision {
                     _ => Self::Deny,
                 }
             }
+            EvaluationDecision::Rewrite(_) => Self::Allow, // Rewrite is an allow with transformation
         }
     }
 }

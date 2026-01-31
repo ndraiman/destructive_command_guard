@@ -202,6 +202,7 @@ impl DcgMcpServer {
             decision: match result.decision {
                 EvaluationDecision::Allow => "allow".to_string(),
                 EvaluationDecision::Deny => "deny".to_string(),
+                EvaluationDecision::Rewrite(_) => "rewrite".to_string(),
             },
             mode,
             skipped_due_to_budget: result.skipped_due_to_budget,

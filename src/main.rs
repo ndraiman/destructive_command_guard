@@ -452,6 +452,31 @@ fn main() {
         return;
     }
 
+    // Handle rewrite decision (rm → trash)
+    if let EvaluationDecision::Rewrite(ref rewrite) = result.decision {
+        if let Some(writer) = history_writer.as_ref() {
+            let entry = build_history_entry(
+                &command,
+                &working_dir,
+                HistoryOutcome::Allow, // Rewrite is effectively allow with modification
+                eval_duration,
+                None,
+                None,
+                None,
+            );
+            writer.log(entry);
+        }
+
+        // Output the rewrite response
+        hook::output_rewrite(
+            &command,
+            &rewrite.rewritten_command,
+            &rewrite.reason,
+            &rewrite.paths,
+        );
+        return;
+    }
+
     if result.decision != EvaluationDecision::Deny {
         if let Some(writer) = history_writer.as_ref() {
             let mut pack_id = None;

@@ -156,6 +156,7 @@ impl LogEntry {
                 DecisionMode::Warn => "warn",
                 DecisionMode::Log => "log",
             },
+            EvaluationDecision::Rewrite(_) => "rewrite",
         };
 
         let mode_str = match mode {
@@ -315,6 +316,8 @@ impl DecisionLogger {
                 // since a destructive pattern did match, even if we're not blocking.
                 DecisionMode::Deny | DecisionMode::Log => self.config.events.deny,
             },
+            // Rewrites are logged with allow events since they're not blocking
+            EvaluationDecision::Rewrite(_) => self.config.events.allow,
         }
     }
 }

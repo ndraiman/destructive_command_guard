@@ -129,7 +129,22 @@ pub(crate) struct RmParseMatch {
 pub(crate) enum RmParseDecision {
     Allow,
     Deny(RmParseMatch),
+    /// Rewrite the rm command to use trash instead of permanent deletion.
+    Rewrite(RmRewriteInfo),
     NoMatch,
+}
+
+/// Information needed to rewrite an rm command to trash.
+#[derive(Debug, Clone)]
+pub(crate) struct RmRewriteInfo {
+    /// The paths to be moved to trash.
+    pub(crate) paths: Vec<String>,
+    /// Whether the original command had a sudo prefix.
+    pub(crate) has_sudo: bool,
+    /// The severity of the original match (used for logging).
+    pub(crate) severity: Severity,
+    /// Byte span of the match for highlighting.
+    pub(crate) span: Option<Range<usize>>,
 }
 
 #[derive(Debug)]
@@ -196,6 +211,113 @@ impl RmFlagTracker {
 
         None
     }
+}
+
+/// Parse an rm command and optionally convert Deny to Rewrite for trash-eligible commands.
+///
+/// This wraps `parse_rm_command` and transforms the result based on trash configuration:
+/// - Critical severity (rm -rf /, rm -rf ~) → always Deny
+/// - Commands that can't be safely rewritten (xargs, find -exec) → always Deny
+/// - Other rm -rf commands → Rewrite when trash is enabled
+pub(crate) fn parse_rm_command_with_trash(
+    command: &str,
+    trash_enabled: bool,
+) -> RmParseDecision {
+    let result = parse_rm_command(command);
+
+    // If trash rewriting is disabled, return the original result
+    if !trash_enabled {
+        return result;
+    }
+
+    // Only transform Deny decisions
+    let RmParseDecision::Deny(ref match_info) = result else {
+        return result;
+    };
+
+    // Never rewrite Critical severity (rm -rf /, rm -rf ~)
+    if match_info.severity == Severity::Critical {
+        return result;
+    }
+
+    // Check if the command can be safely rewritten
+    if !crate::trash::can_safely_rewrite(command) {
+        return result;
+    }
+
+    // Extract paths and sudo info for rewriting
+    let has_sudo = crate::trash::has_sudo_prefix(command);
+    let paths = extract_rm_paths(command);
+
+    if paths.is_empty() {
+        // Can't determine paths, fall back to deny
+        return result;
+    }
+
+    RmParseDecision::Rewrite(RmRewriteInfo {
+        paths,
+        has_sudo,
+        severity: match_info.severity,
+        span: match_info.span.clone(),
+    })
+}
+
+/// Extract path arguments from an rm command.
+fn extract_rm_paths(command: &str) -> Vec<String> {
+    use crate::normalize::{NormalizeTokenKind, tokenize_for_normalization};
+
+    let tokens = tokenize_for_normalization(command);
+    let mut paths = Vec::new();
+    let mut in_rm = false;
+    let mut options_ended = false;
+
+    for token in &tokens {
+        if token.kind == NormalizeTokenKind::Separator {
+            // Reset state at command boundaries
+            if in_rm && !paths.is_empty() {
+                break;
+            }
+            in_rm = false;
+            options_ended = false;
+            continue;
+        }
+
+        let Some(text) = token.text(command) else {
+            continue;
+        };
+
+        // Skip sudo and env var assignments at the start
+        if !in_rm {
+            if text == "sudo" || text.contains('=') {
+                continue;
+            }
+            if text == "rm" {
+                in_rm = true;
+                continue;
+            }
+            continue;
+        }
+
+        // Skip options
+        if !options_ended {
+            if text == "--" {
+                options_ended = true;
+                continue;
+            }
+            if text.starts_with('-') && text != "-" {
+                continue;
+            }
+        }
+
+        // This is a path argument
+        options_ended = true;
+        let unquoted = text
+            .trim_matches('"')
+            .trim_matches('\'');
+        paths.push(unquoted.to_string());
+    }
+
+    paths
 }
 
 pub(crate) fn parse_rm_command(command: &str) -> RmParseDecision {

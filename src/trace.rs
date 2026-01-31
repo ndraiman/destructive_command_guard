@@ -387,6 +387,7 @@ impl ExplainTrace {
         let decision_str = match self.decision {
             EvaluationDecision::Allow => "ALLOW",
             EvaluationDecision::Deny => "DENY",
+            EvaluationDecision::Rewrite(_) => "REWRITE",
         };
 
         let duration_str = format_duration(self.total_duration_us);
@@ -446,6 +447,7 @@ impl ExplainTrace {
         let decision_str = match self.decision {
             EvaluationDecision::Allow => format!("{green}{bold}ALLOW{reset}"),
             EvaluationDecision::Deny => format!("{red}{bold}DENY{reset}"),
+            EvaluationDecision::Rewrite(_) => format!("{yellow}{bold}REWRITE{reset}"),
         };
         out.push_str(&format!("{bold}Decision:{reset} {decision_str}\n"));
         out.push_str(&format!(
@@ -680,6 +682,7 @@ impl ExplainTrace {
             decision: match self.decision {
                 EvaluationDecision::Allow => "allow".to_string(),
                 EvaluationDecision::Deny => "deny".to_string(),
+                EvaluationDecision::Rewrite(_) => "rewrite".to_string(),
             },
             skipped_due_to_budget: self.skipped_due_to_budget.then_some(true),
             total_duration_us: self.total_duration_us,
@@ -961,6 +964,7 @@ impl TraceDetails {
                 decision: match decision {
                     EvaluationDecision::Allow => "allow".to_string(),
                     EvaluationDecision::Deny => "deny".to_string(),
+                    EvaluationDecision::Rewrite(_) => "rewrite".to_string(),
                 },
                 allowlisted: *allowlisted,
             },
@@ -1161,6 +1165,7 @@ fn format_step_details_summary(details: &TraceDetails) -> String {
             let dec = match decision {
                 EvaluationDecision::Allow => "ALLOW",
                 EvaluationDecision::Deny => "DENY",
+                EvaluationDecision::Rewrite(_) => "REWRITE",
             };
             if *allowlisted {
                 format!("{dec} (allowlisted)")
