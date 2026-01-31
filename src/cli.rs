@@ -3741,6 +3741,25 @@ fn show_config(config: &Config) {
     } else {
         println!("  Languages: all");
     }
+    println!();
+
+    println!("Trash rewrite:");
+    println!("  Enabled: {}", config.trash.enabled);
+    println!("  Mode: {}", match config.trash.mode {
+        crate::trash::TrashMode::Rewrite => "rewrite",
+        crate::trash::TrashMode::Deny => "deny",
+    });
+    if !config.trash.custom_command.is_empty() {
+        println!("  Custom command: {}", config.trash.custom_command);
+    }
+    match crate::trash::detect_trash_binary(config.trash.custom_command_opt()) {
+        crate::trash::TrashDetectionResult::Found(bin) => {
+            println!("  Detected binary: {}", bin.command);
+        }
+        crate::trash::TrashDetectionResult::NotFound { install_hint, .. } => {
+            println!("  Detected binary: none ({})", install_hint);
+        }
+    }
 }
 
 const DCG_SCAN_PRE_COMMIT_SENTINEL: &str = "# dcg:scan-pre-commit";
