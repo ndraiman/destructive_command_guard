@@ -219,7 +219,16 @@ impl RmFlagTracker {
 /// - Critical severity (rm -rf /, rm -rf ~) → always Deny
 /// - Commands that can't be safely rewritten (xargs, find -exec) → always Deny
 /// - Other rm -rf commands → Rewrite when trash is enabled
-pub(crate) fn parse_rm_command_with_trash(command: &str, trash_enabled: bool) -> RmParseDecision {
+///
+/// # Arguments
+/// * `command` - The normalized command (for pattern matching)
+/// * `original_command` - The original command (for sudo prefix detection)
+/// * `trash_enabled` - Whether trash rewriting is enabled
+pub(crate) fn parse_rm_command_with_trash(
+    command: &str,
+    original_command: &str,
+    trash_enabled: bool,
+) -> RmParseDecision {
     let result = parse_rm_command(command);
 
     // If trash rewriting is disabled, return the original result
@@ -243,7 +252,8 @@ pub(crate) fn parse_rm_command_with_trash(command: &str, trash_enabled: bool) ->
     }
 
     // Extract paths and sudo info for rewriting
-    let has_sudo = crate::trash::has_sudo_prefix(command);
+    // Check sudo on original_command since normalization strips it
+    let has_sudo = crate::trash::has_sudo_prefix(original_command);
     let paths = extract_rm_paths(command);
 
     if paths.is_empty() {

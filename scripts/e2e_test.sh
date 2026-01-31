@@ -998,6 +998,84 @@ test_command "rm -f file.txt" "allow" "rm -f file.txt (force only)"
 test_command "rm -r directory" "allow" "rm -r directory (recursive only)"
 test_command "rm -i file.txt" "allow" "rm -i file.txt (interactive)"
 
+log_section "Trash Rewrite Tests (rm -> trash)"
+
+# Test helper: run command with trash rewriting enabled
+test_trash_rewrite() {
+    local cmd="$1"
+    local expected="$2"
+    local desc="$3"
+
+    log_test_start "$desc"
+    if $VERBOSE && ! $JSON_OUTPUT; then
+        echo -e "  ${CYAN}Command:${NC} $(truncate_cmd "$cmd")"
+    fi
+
+    local temp_config
+    temp_config=$(mktemp)
+    printf '[trash]\nenabled = true\nmode = "rewrite"\n' > "$temp_config"
+
+    local escaped_cmd
+    escaped_cmd=$(json_escape "$cmd")
+    local json="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$escaped_cmd\"}}"
+    local result
+    result=$(echo "$json" | DCG_CONFIG="$temp_config" "$BINARY" 2>/dev/null || true)
+    rm -f "$temp_config"
+
+    if echo "$result" | grep -q "updatedInput" && echo "$result" | grep -q "$expected"; then
+        log_pass "$desc"
+    else
+        log_fail "$desc" "updatedInput with '$expected'" "$result"
+    fi
+}
+
+# Test helper: verify command is blocked even with trash enabled
+test_trash_blocks() {
+    local cmd="$1"
+    local desc="$2"
+
+    log_test_start "$desc"
+    if $VERBOSE && ! $JSON_OUTPUT; then
+        echo -e "  ${CYAN}Command:${NC} $(truncate_cmd "$cmd")"
+    fi
+
+    local temp_config
+    temp_config=$(mktemp)
+    printf '[trash]\nenabled = true\nmode = "rewrite"\n' > "$temp_config"
+
+    local escaped_cmd
+    escaped_cmd=$(json_escape "$cmd")
+    local json="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$escaped_cmd\"}}"
+    local result
+    result=$(echo "$json" | DCG_CONFIG="$temp_config" "$BINARY" 2>/dev/null || true)
+    rm -f "$temp_config"
+
+    if echo "$result" | grep -q '"permissionDecision":"deny"'; then
+        log_pass "$desc"
+    else
+        log_fail "$desc" "permissionDecision: deny" "$result"
+    fi
+}
+
+# Rewrite tests (only if trash binary exists)
+if command -v trash &>/dev/null || command -v trash-put &>/dev/null || command -v gio &>/dev/null; then
+    test_trash_rewrite "rm -rf ./build" "trash" "trash: rm -rf ./build -> trash"
+    test_trash_rewrite "rm -rf node_modules" "trash" "trash: rm -rf node_modules -> trash"
+    test_trash_rewrite "rm -rf ./foo ./bar" "trash" "trash: rm -rf multiple paths -> trash"
+    test_trash_rewrite "sudo rm -rf ./build" "sudo trash" "trash: sudo rm -rf -> sudo trash"
+else
+    if $VERBOSE && ! $JSON_OUTPUT; then
+        echo -e "  ${YELLOW}SKIP:${NC} No trash binary found for rewrite tests"
+    fi
+fi
+
+# Block tests (critical paths must always block even with trash enabled)
+test_trash_blocks "rm -rf /" "trash: critical path / always blocks"
+test_trash_blocks "rm -rf ~" "trash: home directory always blocks"
+test_trash_blocks "rm -rf /etc" "trash: system path /etc always blocks"
+test_trash_blocks 'find . -exec rm -rf {} \\;' "trash: find -exec rm always blocks"
+test_trash_blocks "xargs rm -rf" "trash: xargs rm always blocks"
+
 log_section "Non-Git/Rm Commands (should ALLOW via quick reject)"
 
 test_command "ls -la" "allow" "ls -la"

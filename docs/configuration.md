@@ -145,6 +145,42 @@ CLI overrides:
 - `--heredoc-timeout <ms>`
 - `--heredoc-languages <lang1,lang2,...>`
 
+## Trash Rewrite (rm → trash)
+
+Instead of blocking `rm -rf` commands, dcg can rewrite them to use a trash
+utility. Files are moved to trash instead of being permanently deleted.
+
+```toml
+[trash]
+enabled = true              # Enable rm → trash rewriting (default: false)
+mode = "rewrite"            # "rewrite" or "deny" (default: "rewrite")
+custom_command = ""         # Override auto-detected trash binary
+```
+
+### Environment Variables
+
+- `DCG_TRASH_COMMAND="trash"` - Override the trash binary
+
+### Platform Detection
+
+dcg auto-detects the appropriate trash binary:
+
+| Platform | Binaries Checked (in order) |
+|----------|----------------------------|
+| macOS    | `trash` (Homebrew), `trash-put` |
+| Linux    | `gio` (GNOME), `trash-put`, `kioclient5` (KDE) |
+| Other    | `trash-put` |
+
+Use `dcg trash-check` to verify detection and see which binary will be used.
+
+### Safety Guarantees
+
+Even with trash rewriting enabled:
+
+- **Critical paths always block**: `rm -rf /`, `rm -rf ~`, etc.
+- **Unsafe patterns always block**: `xargs rm`, `find -exec rm`, command substitution
+- **Falls back to deny**: If no trash binary is found, commands are blocked
+
 ## Agent-Specific Profiles
 
 dcg can detect which AI coding agent is invoking it and apply agent-specific

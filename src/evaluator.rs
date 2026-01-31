@@ -1494,6 +1494,7 @@ fn evaluate_packs_with_allowlists(
     let rm_parse = has_filesystem_pack.then(|| {
         crate::packs::core::filesystem::parse_rm_command_with_trash(
             command_for_packs,
+            original_command,
             trash_enabled,
         )
     });

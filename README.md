@@ -43,6 +43,7 @@ curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/destructive_comm
 | **Sub-Millisecond Latency** | SIMD-accelerated filtering—you won't notice it's there |
 | **Heredoc/Inline Script Scanning** | Catches `python -c "os.remove(...)"` and embedded shell scripts |
 | **Smart Context Detection** | Won't block `grep "rm -rf"` (data) but will block `rm -rf /` (execution) |
+| **Trash Rewrite Mode** | Optionally rewrite `rm -rf` to use trash instead of blocking |
 | **Scan Mode for CI** | Pre-commit hooks and CI integration to catch dangerous commands in code review |
 | **Fail-Open Design** | Never blocks your workflow due to timeouts or parse errors |
 | **Explain Mode** | `dcg explain "command"` shows exactly why something is blocked |
@@ -77,6 +78,20 @@ enabled = [
     "containers.docker",      # Blocks docker system prune
 ]
 ```
+
+### Trash Rewrite Mode
+
+Instead of blocking `rm -rf` commands, dcg can rewrite them to use your system's
+trash utility—files go to trash instead of being permanently deleted:
+
+```toml
+# ~/.config/dcg/config.toml
+[trash]
+enabled = true    # Rewrite rm -rf → trash (default: false)
+```
+
+Platform support: `trash` (macOS/Homebrew), `gio trash` (Linux/GNOME), `trash-put` (trash-cli).
+Use `dcg trash-check` to verify detection. Critical paths (`/`, `~`) are always blocked.
 
 ### Agent-Specific Profiles
 
