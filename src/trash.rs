@@ -120,37 +120,37 @@ impl TrashDetectionResult {
 #[must_use]
 pub fn detect_trash_binary(custom_command: Option<&str>) -> TrashDetectionResult {
     // 1. Check environment variable override
-    if let Ok(cmd) = env::var(ENV_TRASH_COMMAND) {
-        if !cmd.trim().is_empty() {
-            let parts: Vec<&str> = cmd.split_whitespace().collect();
-            if !parts.is_empty() {
-                return TrashDetectionResult::Found(TrashBinary {
-                    command: parts[0].to_string(),
-                    args: parts[1..].iter().map(|s| (*s).to_string()).collect(),
-                    description: "Custom trash command from DCG_TRASH_COMMAND",
-                    source: TrashSource::EnvVar,
-                });
-            }
-        }
+    if let Some(binary) = parse_custom_command(env::var(ENV_TRASH_COMMAND).ok(), TrashSource::EnvVar) {
+        return TrashDetectionResult::Found(binary);
     }
 
     // 2. Check config custom_command
-    if let Some(cmd) = custom_command {
-        if !cmd.trim().is_empty() {
-            let parts: Vec<&str> = cmd.split_whitespace().collect();
-            if !parts.is_empty() {
-                return TrashDetectionResult::Found(TrashBinary {
-                    command: parts[0].to_string(),
-                    args: parts[1..].iter().map(|s| (*s).to_string()).collect(),
-                    description: "Custom trash command from config",
-                    source: TrashSource::Config,
-                });
-            }
-        }
+    if let Some(binary) = parse_custom_command(custom_command.map(str::to_string), TrashSource::Config) {
+        return TrashDetectionResult::Found(binary);
     }
 
     // 3. Platform-specific detection
     detect_platform_trash_binary()
+}
+
+/// Parse a custom command string into a TrashBinary.
+fn parse_custom_command(cmd: Option<String>, source: TrashSource) -> Option<TrashBinary> {
+    let cmd = cmd?;
+    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    let first = parts.first()?;
+
+    let description = match source {
+        TrashSource::EnvVar => "Custom trash command from DCG_TRASH_COMMAND",
+        TrashSource::Config => "Custom trash command from config",
+        TrashSource::PlatformDetection => "Custom trash command",
+    };
+
+    Some(TrashBinary {
+        command: (*first).to_string(),
+        args: parts[1..].iter().map(|s| (*s).to_string()).collect(),
+        description,
+        source,
+    })
 }
 
 /// Detect platform-specific trash binary.

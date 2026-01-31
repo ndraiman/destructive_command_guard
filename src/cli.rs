@@ -7458,12 +7458,7 @@ fn handle_trash_check(config: &Config, format: TrashCheckFormat) {
     let enabled = config.trash.enabled;
 
     // Detect trash binary with custom command override
-    let custom_cmd = if config.trash.custom_command.is_empty() {
-        None
-    } else {
-        Some(config.trash.custom_command.as_str())
-    };
-    let result = detect_trash_binary(custom_cmd);
+    let result = detect_trash_binary(config.trash.custom_command_opt());
 
     match format {
         TrashCheckFormat::Pretty => {
