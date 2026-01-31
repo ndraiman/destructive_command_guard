@@ -356,35 +356,6 @@ pub fn has_sudo_prefix(command: &str) -> bool {
     trimmed.starts_with("sudo ") || trimmed.starts_with("sudo\t")
 }
 
-/// Extract the command part after common prefixes (sudo, env vars, etc.).
-#[must_use]
-pub fn strip_command_prefix(command: &str) -> &str {
-    let mut rest = command.trim_start();
-
-    // Strip sudo
-    if let Some(after_sudo) = rest.strip_prefix("sudo") {
-        rest = after_sudo.trim_start();
-    }
-
-    // Strip env var assignments (VAR=value command)
-    while let Some(eq_pos) = rest.find('=') {
-        // Check if there's whitespace before the = (not an env assignment)
-        let before_eq = &rest[..eq_pos];
-        if before_eq.contains(char::is_whitespace) {
-            break;
-        }
-        // Skip past the value
-        let after_eq = &rest[eq_pos + 1..];
-        if let Some(space_pos) = after_eq.find(char::is_whitespace) {
-            rest = after_eq[space_pos..].trim_start();
-        } else {
-            break;
-        }
-    }
-
-    rest
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,15 +408,6 @@ mod tests {
             source: TrashSource::PlatformDetection,
         };
         assert_eq!(gio.format_command(&["/path/a"]), "gio trash /path/a");
-    }
-
-    #[test]
-    fn test_strip_command_prefix() {
-        assert_eq!(strip_command_prefix("rm -rf /"), "rm -rf /");
-        assert_eq!(strip_command_prefix("sudo rm -rf /"), "rm -rf /");
-        assert_eq!(strip_command_prefix("  sudo rm -rf /"), "rm -rf /");
-        assert_eq!(strip_command_prefix("VAR=val rm -rf /"), "rm -rf /");
-        assert_eq!(strip_command_prefix("sudo VAR=val rm -rf /"), "rm -rf /");
     }
 
     #[test]

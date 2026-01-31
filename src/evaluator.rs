@@ -1489,7 +1489,6 @@ fn evaluate_packs_with_allowlists(
     let has_filesystem_pack = candidate_packs
         .iter()
         .any(|(pack_id, _)| pack_id.as_str() == "core.filesystem");
-    // Check if trash rewriting is enabled (loads config once, uses cached value after)
     let trash_enabled = crate::config::Config::load().trash.enabled;
     let rm_parse = has_filesystem_pack.then(|| {
         crate::packs::core::filesystem::parse_rm_command_with_trash(

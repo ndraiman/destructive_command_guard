@@ -1013,6 +1013,7 @@ test_trash_rewrite() {
 
     local temp_config
     temp_config=$(mktemp)
+    trap 'rm -f "$temp_config"' RETURN
     printf '[trash]\nenabled = true\nmode = "rewrite"\n' > "$temp_config"
 
     local escaped_cmd
@@ -1020,7 +1021,6 @@ test_trash_rewrite() {
     local json="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$escaped_cmd\"}}"
     local result
     result=$(echo "$json" | DCG_CONFIG="$temp_config" "$BINARY" 2>/dev/null || true)
-    rm -f "$temp_config"
 
     if echo "$result" | grep -q "updatedInput" && echo "$result" | grep -q "$expected"; then
         log_pass "$desc"
@@ -1041,6 +1041,7 @@ test_trash_blocks() {
 
     local temp_config
     temp_config=$(mktemp)
+    trap 'rm -f "$temp_config"' RETURN
     printf '[trash]\nenabled = true\nmode = "rewrite"\n' > "$temp_config"
 
     local escaped_cmd
@@ -1048,7 +1049,6 @@ test_trash_blocks() {
     local json="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$escaped_cmd\"}}"
     local result
     result=$(echo "$json" | DCG_CONFIG="$temp_config" "$BINARY" 2>/dev/null || true)
-    rm -f "$temp_config"
 
     if echo "$result" | grep -q '"permissionDecision":"deny"'; then
         log_pass "$desc"
