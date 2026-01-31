@@ -654,31 +654,17 @@ pub fn output_rewrite(original: &str, rewritten: &str, reason: &str, paths: &[St
 
     // Print rewrite notice to stderr (visible to user)
     let _ = writeln!(handle);
-    let _ = writeln!(
-        handle,
-        "{green}[dcg rewrite]{reset} {reason}",
-    );
-    let _ = writeln!(
-        handle,
-        "  {dim}Original:{reset}  {cyan}{original}{reset}",
-    );
-    let _ = writeln!(
-        handle,
-        "  {dim}Rewritten:{reset} {cyan}{rewritten}{reset}",
-    );
+    let _ = writeln!(handle, "{green}[dcg rewrite]{reset} {reason}",);
+    let _ = writeln!(handle, "  {dim}Original:{reset}  {cyan}{original}{reset}",);
+    let _ = writeln!(handle, "  {dim}Rewritten:{reset} {cyan}{rewritten}{reset}",);
     if !paths.is_empty() {
-        let _ = writeln!(
-            handle,
-            "  {dim}Paths:{reset}     {}",
-            paths.join(", ")
-        );
+        let _ = writeln!(handle, "  {dim}Paths:{reset}     {}", paths.join(", "));
     }
     let _ = writeln!(handle);
 
     // Build JSON response for hook protocol (stdout)
-    let message = format!(
-        "dcg rewrote destructive command to safer alternative: {original} → {rewritten}"
-    );
+    let message =
+        format!("dcg rewrote destructive command to safer alternative: {original} → {rewritten}");
 
     let output = RewriteHookOutput {
         hook_specific_output: RewriteHookSpecificOutput {

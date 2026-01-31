@@ -219,10 +219,7 @@ impl RmFlagTracker {
 /// - Critical severity (rm -rf /, rm -rf ~) → always Deny
 /// - Commands that can't be safely rewritten (xargs, find -exec) → always Deny
 /// - Other rm -rf commands → Rewrite when trash is enabled
-pub(crate) fn parse_rm_command_with_trash(
-    command: &str,
-    trash_enabled: bool,
-) -> RmParseDecision {
+pub(crate) fn parse_rm_command_with_trash(command: &str, trash_enabled: bool) -> RmParseDecision {
     let result = parse_rm_command(command);
 
     // If trash rewriting is disabled, return the original result
@@ -311,9 +308,7 @@ fn extract_rm_paths(command: &str) -> Vec<String> {
 
         // This is a path argument
         options_ended = true;
-        let unquoted = text
-            .trim_matches('"')
-            .trim_matches('\'');
+        let unquoted = text.trim_matches('"').trim_matches('\'');
         paths.push(unquoted.to_string());
     }
 

@@ -120,12 +120,16 @@ impl TrashDetectionResult {
 #[must_use]
 pub fn detect_trash_binary(custom_command: Option<&str>) -> TrashDetectionResult {
     // 1. Check environment variable override
-    if let Some(binary) = parse_custom_command(env::var(ENV_TRASH_COMMAND).ok(), TrashSource::EnvVar) {
+    if let Some(binary) =
+        parse_custom_command(env::var(ENV_TRASH_COMMAND).ok(), TrashSource::EnvVar)
+    {
         return TrashDetectionResult::Found(binary);
     }
 
     // 2. Check config custom_command
-    if let Some(binary) = parse_custom_command(custom_command.map(str::to_string), TrashSource::Config) {
+    if let Some(binary) =
+        parse_custom_command(custom_command.map(str::to_string), TrashSource::Config)
+    {
         return TrashDetectionResult::Found(binary);
     }
 
@@ -181,10 +185,10 @@ fn detect_platform_trash_binary() -> TrashDetectionResult {
             });
         }
 
-        return TrashDetectionResult::NotFound {
+        TrashDetectionResult::NotFound {
             checked,
             install_hint: "Install with: brew install trash",
-        };
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -224,10 +228,10 @@ fn detect_platform_trash_binary() -> TrashDetectionResult {
             });
         }
 
-        return TrashDetectionResult::NotFound {
+        TrashDetectionResult::NotFound {
             checked,
             install_hint: "Install with: sudo apt install trash-cli  # or: sudo dnf install trash-cli",
-        };
+        }
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -329,14 +333,14 @@ pub fn can_safely_rewrite(command: &str) -> bool {
     }
 
     // Subshell expansion with rm
-    if (lower.contains("$(") || lower.contains("`")) && lower.contains("rm") {
+    if (lower.contains("$(") || lower.contains('`')) && lower.contains("rm") {
         return false;
     }
 
     // Glob in variable that might expand unexpectedly
     // This is conservative - we allow simple variable expansion like $TMPDIR
     // but reject patterns that might expand to multiple items in unsafe ways
-    if lower.contains("${") && lower.contains("*") {
+    if lower.contains("${") && lower.contains('*') {
         return false;
     }
 
@@ -415,7 +419,10 @@ mod tests {
             description: "test",
             source: TrashSource::PlatformDetection,
         };
-        assert_eq!(bin.format_command(&["/path/a", "/path/b"]), "trash /path/a /path/b");
+        assert_eq!(
+            bin.format_command(&["/path/a", "/path/b"]),
+            "trash /path/a /path/b"
+        );
         assert_eq!(
             bin.format_command_with_sudo(&["/path/a"], true),
             "sudo trash /path/a"
@@ -479,12 +486,7 @@ mod tests {
         assert_eq!(info.rewritten, "trash a b c");
 
         // Unsafe pattern - should return None
-        let info = rewrite_rm_to_trash(
-            "find . -exec rm {} \\;",
-            &["{}".to_string()],
-            &bin,
-            false,
-        );
+        let info = rewrite_rm_to_trash("find . -exec rm {} \\;", &["{}".to_string()], &bin, false);
         assert!(info.is_none());
     }
 }

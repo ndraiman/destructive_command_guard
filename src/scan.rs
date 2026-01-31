@@ -377,6 +377,32 @@ pub fn evaluate_extracted_command(
         return None;
     }
 
+    // Handle Rewrite decisions (rm → trash) - still report as findings in scan mode
+    if let EvaluationDecision::Rewrite(ref rewrite) = result.decision {
+        let extracted_command = redact_and_truncate(&extracted.command, options);
+        return Some(ScanFinding {
+            file: extracted.file.clone(),
+            line: extracted.line,
+            col: extracted.col,
+            extractor_id: extracted.extractor_id.clone(),
+            extracted_command,
+            decision: ScanDecision::Deny,
+            severity: match rewrite.severity {
+                crate::packs::Severity::Critical | crate::packs::Severity::High => {
+                    ScanSeverity::Error
+                }
+                crate::packs::Severity::Medium => ScanSeverity::Warning,
+                crate::packs::Severity::Low => ScanSeverity::Info,
+            },
+            rule_id: Some("core.filesystem:rm-rf-general".to_string()),
+            reason: Some(rewrite.reason.clone()),
+            suggestion: Some(
+                "Use trash-cli or similar to move files to trash instead of permanent deletion"
+                    .to_string(),
+            ),
+        });
+    }
+
     let Some(pattern) = result.pattern_info else {
         return Some(ScanFinding {
             file: extracted.file.clone(),

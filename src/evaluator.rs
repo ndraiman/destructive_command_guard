@@ -1492,7 +1492,10 @@ fn evaluate_packs_with_allowlists(
     // Check if trash rewriting is enabled (loads config once, uses cached value after)
     let trash_enabled = crate::config::Config::load().trash.enabled;
     let rm_parse = has_filesystem_pack.then(|| {
-        crate::packs::core::filesystem::parse_rm_command_with_trash(command_for_packs, trash_enabled)
+        crate::packs::core::filesystem::parse_rm_command_with_trash(
+            command_for_packs,
+            trash_enabled,
+        )
     });
 
     let normalized_offset = compute_normalized_offset(command_for_match, normalized);
@@ -1611,8 +1614,9 @@ fn evaluate_packs_with_allowlists(
                                 start: span.start,
                                 end: span.end,
                             });
-                            let mapped_span =
-                                span.and_then(|span| map_span_with_offset(span, normalized_offset, original_len));
+                            let mapped_span = span.and_then(|span| {
+                                map_span_with_offset(span, normalized_offset, original_len)
+                            });
                             let reason = format!(
                                 "Rewriting rm to {} for safer file deletion",
                                 trash_binary.command
@@ -1634,7 +1638,9 @@ fn evaluate_packs_with_allowlists(
                         pack_id,
                         "rm-recursive",
                         "Recursive rm without trash binary available",
-                        Some("No trash binary found. Install 'trash-cli' or 'gio' to enable rm → trash rewriting."),
+                        Some(
+                            "No trash binary found. Install 'trash-cli' or 'gio' to enable rm → trash rewriting.",
+                        ),
                         info.severity,
                         &[],
                     );
