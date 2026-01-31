@@ -283,15 +283,12 @@ fn extract_rm_paths(command: &str) -> Vec<String> {
             continue;
         };
 
-        // Skip sudo and env var assignments at the start
+        // Skip sudo and env var assignments at the start; detect rm
         if !in_rm {
-            if text == "sudo" || text.contains('=') {
-                continue;
-            }
             if text == "rm" {
                 in_rm = true;
-                continue;
             }
+            // Skip sudo, env vars, and any token before rm
             continue;
         }
 

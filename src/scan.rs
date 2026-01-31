@@ -203,6 +203,16 @@ impl ScanSeverity {
     }
 }
 
+impl From<crate::packs::Severity> for ScanSeverity {
+    fn from(severity: crate::packs::Severity) -> Self {
+        match severity {
+            crate::packs::Severity::Critical | crate::packs::Severity::High => Self::Error,
+            crate::packs::Severity::Medium => Self::Warning,
+            crate::packs::Severity::Low => Self::Info,
+        }
+    }
+}
+
 /// Extracted executable command from a file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedCommand {
@@ -379,21 +389,14 @@ pub fn evaluate_extracted_command(
 
     // Handle Rewrite decisions (rm → trash) - still report as findings in scan mode
     if let EvaluationDecision::Rewrite(ref rewrite) = result.decision {
-        let extracted_command = redact_and_truncate(&extracted.command, options);
         return Some(ScanFinding {
             file: extracted.file.clone(),
             line: extracted.line,
             col: extracted.col,
             extractor_id: extracted.extractor_id.clone(),
-            extracted_command,
+            extracted_command: redact_and_truncate(&extracted.command, options),
             decision: ScanDecision::Deny,
-            severity: match rewrite.severity {
-                crate::packs::Severity::Critical | crate::packs::Severity::High => {
-                    ScanSeverity::Error
-                }
-                crate::packs::Severity::Medium => ScanSeverity::Warning,
-                crate::packs::Severity::Low => ScanSeverity::Info,
-            },
+            severity: rewrite.severity.into(),
             rule_id: Some("core.filesystem:rm-rf-general".to_string()),
             reason: Some(rewrite.reason.clone()),
             suggestion: Some(
@@ -426,11 +429,7 @@ pub fn evaluate_extracted_command(
         Some(DecisionMode::Log) => ScanDecision::Allow,
     };
 
-    let scan_severity = match severity {
-        Some(Severity::Medium) => ScanSeverity::Warning,
-        Some(Severity::Low) => ScanSeverity::Info,
-        Some(Severity::Critical | Severity::High) | None => ScanSeverity::Error,
-    };
+    let scan_severity = severity.map_or(ScanSeverity::Error, ScanSeverity::from);
 
     let suggestion = rule_id
         .as_deref()

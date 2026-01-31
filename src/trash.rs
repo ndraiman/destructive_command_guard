@@ -62,9 +62,11 @@ impl TrashBinary {
     /// Format a trash command for the given paths.
     #[must_use]
     pub fn format_command(&self, paths: &[&str]) -> String {
-        let mut parts = vec![self.command.clone()];
-        parts.extend(self.args.iter().cloned());
-        parts.extend(paths.iter().map(|s| (*s).to_string()));
+        let capacity = 1 + self.args.len() + paths.len();
+        let mut parts = Vec::with_capacity(capacity);
+        parts.push(self.command.as_str());
+        parts.extend(self.args.iter().map(String::as_str));
+        parts.extend(paths.iter().copied());
         parts.join(" ")
     }
 
@@ -140,8 +142,9 @@ pub fn detect_trash_binary(custom_command: Option<&str>) -> TrashDetectionResult
 /// Parse a custom command string into a TrashBinary.
 fn parse_custom_command(cmd: Option<String>, source: TrashSource) -> Option<TrashBinary> {
     let cmd = cmd?;
-    let parts: Vec<&str> = cmd.split_whitespace().collect();
-    let first = parts.first()?;
+    let mut parts = cmd.split_whitespace();
+    let command = parts.next()?.to_string();
+    let args: Vec<String> = parts.map(str::to_string).collect();
 
     let description = match source {
         TrashSource::EnvVar => "Custom trash command from DCG_TRASH_COMMAND",
@@ -150,8 +153,8 @@ fn parse_custom_command(cmd: Option<String>, source: TrashSource) -> Option<Tras
     };
 
     Some(TrashBinary {
-        command: (*first).to_string(),
-        args: parts[1..].iter().map(|s| (*s).to_string()).collect(),
+        command,
+        args,
         description,
         source,
     })
@@ -300,7 +303,6 @@ pub fn rewrite_rm_to_trash(
         return None;
     }
 
-    // Convert paths to references for format_command
     let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
     let rewritten = trash_binary.format_command_with_sudo(&path_refs, has_sudo);
 
