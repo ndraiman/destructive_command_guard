@@ -1604,47 +1604,60 @@ fn evaluate_packs_with_allowlists(
                 Some(crate::packs::core::filesystem::RmParseDecision::Rewrite(info)) => {
                     // Rewrite decision: detect trash binary and generate rewritten command
                     let trash_result = crate::trash::detect_trash_binary(None);
-                    if let Some(trash_binary) = trash_result.binary() {
-                        if let Some(rewrite_info) = crate::trash::rewrite_rm_to_trash(
-                            original_command,
-                            &info.paths,
-                            trash_binary,
-                            info.has_sudo,
-                        ) {
-                            let span = info.span.as_ref().map(|span| MatchSpan {
-                                start: span.start,
-                                end: span.end,
-                            });
-                            let mapped_span = span.and_then(|span| {
-                                map_span_with_offset(span, normalized_offset, original_len)
-                            });
-                            let reason = format!(
-                                "Rewriting rm to {} for safer file deletion",
-                                trash_binary.command
-                            );
-                            return EvaluationResult::rewrite_rm_to_trash(
+                    match trash_result {
+                        crate::trash::TrashDetectionResult::Found(ref trash_binary) => {
+                            if let Some(rewrite_info) = crate::trash::rewrite_rm_to_trash(
                                 original_command,
-                                &rewrite_info.rewritten,
-                                &reason,
-                                info.paths.clone(),
+                                &info.paths,
+                                trash_binary,
                                 info.has_sudo,
+                            ) {
+                                let span = info.span.as_ref().map(|span| MatchSpan {
+                                    start: span.start,
+                                    end: span.end,
+                                });
+                                let mapped_span = span.and_then(|span| {
+                                    map_span_with_offset(span, normalized_offset, original_len)
+                                });
+                                let reason = format!(
+                                    "Rewriting rm to {} for safer file deletion",
+                                    trash_binary.command
+                                );
+                                return EvaluationResult::rewrite_rm_to_trash(
+                                    original_command,
+                                    &rewrite_info.rewritten,
+                                    &reason,
+                                    info.paths.clone(),
+                                    info.has_sudo,
+                                    info.severity,
+                                    mapped_span,
+                                );
+                            }
+                            // Rewrite failed (e.g., piped input) - fallback to deny
+                            return EvaluationResult::denied_by_pack_pattern(
+                                pack_id,
+                                "rm-recursive",
+                                "Recursive rm cannot be safely rewritten to trash",
+                                Some(
+                                    "Command uses piped input, find -exec, or xargs which cannot be rewritten.",
+                                ),
                                 info.severity,
-                                mapped_span,
+                                &[],
+                            );
+                        }
+                        crate::trash::TrashDetectionResult::NotFound { install_hint, .. } => {
+                            // No trash binary found - use platform-specific install hint
+                            let suggestion = format!("No trash binary found. {install_hint}");
+                            return EvaluationResult::denied_by_pack_pattern(
+                                pack_id,
+                                "rm-recursive",
+                                "Recursive rm without trash binary available",
+                                Some(Box::leak(suggestion.into_boxed_str())),
+                                info.severity,
+                                &[],
                             );
                         }
                     }
-                    // Fallback to deny if trash binary not found or rewrite failed
-                    // Use denied_by_pack_pattern (span not used in fallback)
-                    return EvaluationResult::denied_by_pack_pattern(
-                        pack_id,
-                        "rm-recursive",
-                        "Recursive rm without trash binary available",
-                        Some(
-                            "No trash binary found. Install 'trash-cli' or 'gio' to enable rm → trash rewriting.",
-                        ),
-                        info.severity,
-                        &[],
-                    );
                 }
             }
         } else {
