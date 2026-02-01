@@ -1620,23 +1620,20 @@ fn evaluate_packs_with_allowlists(
                         }
                     };
 
-                    let Some(rewrite_info) = rewrite_rm_to_trash(
+                    // Map rm_span from normalized command to original command
+                    let mapped_rm_span = {
+                        let offset = normalized_offset.unwrap_or(0);
+                        let start = info.rm_span.start.saturating_add(offset);
+                        let end = info.rm_span.end.saturating_add(offset);
+                        start..end.min(original_len)
+                    };
+
+                    let rewrite_info = rewrite_rm_to_trash(
                         original_command,
+                        mapped_rm_span,
                         &info.paths,
                         &trash_binary,
-                        info.has_sudo,
-                    ) else {
-                        return EvaluationResult::denied_by_pack_pattern(
-                            pack_id,
-                            "rm-recursive",
-                            "Recursive rm cannot be safely rewritten to trash",
-                            Some(
-                                "Command uses piped input, find -exec, or xargs which cannot be rewritten.",
-                            ),
-                            info.severity,
-                            &[],
-                        );
-                    };
+                    );
 
                     let mapped_span = info.span.as_ref().and_then(|span| {
                         map_span_with_offset(

@@ -122,7 +122,10 @@ pub(crate) struct RmParseMatch {
     pub(crate) pattern_name: &'static str,
     pub(crate) reason: &'static str,
     pub(crate) severity: Severity,
+    /// Byte span of the flags for highlighting.
     pub(crate) span: Option<Range<usize>>,
+    /// Byte span of "rm" and its flags for text replacement (e.g., "rm -rf").
+    pub(crate) rm_span: Range<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -137,7 +140,9 @@ pub(crate) enum RmParseDecision {
 /// Information needed to rewrite an rm command to trash.
 #[derive(Debug, Clone)]
 pub(crate) struct RmRewriteInfo {
-    /// The paths to be moved to trash.
+    /// Byte span of "rm" and its flags (e.g., "rm -rf") for text replacement.
+    pub(crate) rm_span: Range<usize>,
+    /// The paths to be moved to trash (for display purposes, may be empty).
     pub(crate) paths: Vec<String>,
     /// Whether the original command had a sudo prefix.
     pub(crate) has_sudo: bool,
@@ -165,6 +170,8 @@ enum RmFlagStyle {
 struct RmFlagState {
     style: RmFlagStyle,
     span: Option<Range<usize>>,
+    /// End byte position of the last flag (for computing rm_span).
+    flags_end: usize,
     saw_terminator: bool,
 }
 
@@ -184,11 +191,29 @@ struct RmFlagTracker {
 }
 
 impl RmFlagTracker {
+    /// Compute the end position of the last flag from all tracked spans.
+    fn flags_end(&self) -> usize {
+        [
+            &self.combined_span,
+            &self.r_span,
+            &self.f_span,
+            &self.recursive_span,
+            &self.force_span,
+        ]
+        .iter()
+        .filter_map(|s| s.as_ref().map(|r| r.end))
+        .max()
+        .unwrap_or(0)
+    }
+
     fn resolve(self) -> Option<RmFlagState> {
+        let flags_end = self.flags_end();
+
         if let Some(span) = self.combined_span {
             return Some(RmFlagState {
                 style: RmFlagStyle::Combined,
                 span: Some(span),
+                flags_end,
                 saw_terminator: self.saw_terminator,
             });
         }
@@ -197,6 +222,7 @@ impl RmFlagTracker {
             return Some(RmFlagState {
                 style: RmFlagStyle::Separate,
                 span: self.r_span.or(self.f_span),
+                flags_end,
                 saw_terminator: self.saw_terminator,
             });
         }
@@ -205,6 +231,7 @@ impl RmFlagTracker {
             return Some(RmFlagState {
                 style: RmFlagStyle::Long,
                 span: self.recursive_span.or(self.force_span),
+                flags_end,
                 saw_terminator: self.saw_terminator,
             });
         }
@@ -217,8 +244,7 @@ impl RmFlagTracker {
 ///
 /// This wraps `parse_rm_command` and transforms the result based on trash configuration:
 /// - Critical severity (rm -rf /, rm -rf ~) → always Deny
-/// - Commands that can't be safely rewritten (xargs, find -exec) → always Deny
-/// - Other rm -rf commands → Rewrite when trash is enabled
+/// - Other rm -rf commands → Rewrite when trash is enabled (uses text replacement)
 ///
 /// # Arguments
 /// * `command` - The normalized command (for pattern matching)
@@ -246,22 +272,13 @@ pub(crate) fn parse_rm_command_with_trash(
         return result;
     }
 
-    // Check if the command can be safely rewritten
-    if !crate::trash::can_safely_rewrite(command) {
-        return result;
-    }
-
-    // Extract paths and sudo info for rewriting
+    // Extract paths for display (may be empty for complex commands like loops)
     // Check sudo on original_command since normalization strips it
     let has_sudo = crate::trash::has_sudo_prefix(original_command);
     let paths = extract_rm_paths(command);
 
-    if paths.is_empty() {
-        // Can't determine paths, fall back to deny
-        return result;
-    }
-
     RmParseDecision::Rewrite(RmRewriteInfo {
+        rm_span: match_info.rm_span.clone(),
         paths,
         has_sudo,
         severity: match_info.severity,
@@ -342,12 +359,31 @@ pub(crate) fn parse_rm_command(command: &str) -> RmParseDecision {
         };
 
         if text == "rm" {
-            return parse_rm_segment(command, &tokens, i + 1);
+            return parse_rm_segment(command, &tokens, i + 1, current.byte_range.start);
         }
 
-        // Skip to the next separator before scanning for another command word.
+        // Shell control keywords and commands that start new command contexts.
+        // After these, the next word could be a command like "rm".
+        if matches!(
+            text,
+            "do" | "then" | "else" | "elif" | "{" | "!" | "xargs" | "-exec" | "-execdir"
+        ) {
+            i += 1;
+            continue;
+        }
+
+        // Skip to the next separator or control keyword before scanning for another command word.
         i += 1;
         while i < tokens.len() && tokens[i].kind != NormalizeTokenKind::Separator {
+            // Check if this token is a control keyword - if so, break to continue outer loop
+            if let Some(skip_text) = tokens[i].text(command) {
+                if matches!(
+                    skip_text,
+                    "do" | "then" | "else" | "elif" | "{" | "!" | "xargs" | "-exec" | "-execdir"
+                ) {
+                    break;
+                }
+            }
             i += 1;
         }
     }
@@ -360,6 +396,7 @@ fn parse_rm_segment(
     command: &str,
     tokens: &[crate::normalize::NormalizeToken],
     start_idx: usize,
+    rm_start: usize,
 ) -> RmParseDecision {
     let mut options_ended = false;
     let mut flags = RmFlagTracker::default();
@@ -478,6 +515,7 @@ fn parse_rm_segment(
         reason,
         severity,
         span,
+        rm_span: rm_start..flag_state.flags_end,
     })
 }
 
@@ -985,5 +1023,92 @@ mod tests {
     #[test]
     fn test_rm_parser_option_terminator() {
         assert_rm_parser_no_match("rm -- -rf /tmp/safe");
+    }
+
+    #[test]
+    fn test_rm_parser_for_loop_finds_rm() {
+        // For loop with rm -rf should be detected
+        let command = "for d in */; do rm -rf \"$d\"; done";
+        let result = parse_rm_command(command);
+        match result {
+            RmParseDecision::Deny(hit) => {
+                assert_eq!(hit.pattern_name, RM_RF_GENERAL_NAME);
+                // Verify rm_span covers "rm -rf"
+                let rm_text = &command[hit.rm_span.clone()];
+                assert_eq!(rm_text, "rm -rf", "rm_span should cover 'rm -rf', got '{}'", rm_text);
+            }
+            other => panic!("Expected Deny for for loop rm, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_rm_rewrite_for_loop() {
+        // Test the full rewrite flow for a for loop
+        let command = "for d in */; do rm -rf \"$d\"; done";
+        let result = parse_rm_command_with_trash(command, command, true);
+        match result {
+            RmParseDecision::Rewrite(info) => {
+                // Verify rm_span covers "rm -rf"
+                let rm_text = &command[info.rm_span.clone()];
+                assert_eq!(rm_text, "rm -rf", "rm_span should cover 'rm -rf', got '{}'", rm_text);
+            }
+            other => panic!("Expected Rewrite for for loop rm with trash enabled, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_rm_parser_find_exec() {
+        // find -exec rm should be detected
+        let command = "find . -name \"*.tmp\" -exec rm -rf {} \\;";
+        let result = parse_rm_command(command);
+        match result {
+            RmParseDecision::Deny(hit) => {
+                assert_eq!(hit.pattern_name, RM_RF_GENERAL_NAME);
+                let rm_text = &command[hit.rm_span.clone()];
+                assert_eq!(rm_text, "rm -rf", "rm_span should cover 'rm -rf', got '{}'", rm_text);
+            }
+            other => panic!("Expected Deny for find -exec rm, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_rm_parser_xargs() {
+        // xargs rm should be detected
+        let command = "ls | xargs rm -rf";
+        let result = parse_rm_command(command);
+        match result {
+            RmParseDecision::Deny(hit) => {
+                assert_eq!(hit.pattern_name, RM_RF_GENERAL_NAME);
+                let rm_text = &command[hit.rm_span.clone()];
+                assert_eq!(rm_text, "rm -rf", "rm_span should cover 'rm -rf', got '{}'", rm_text);
+            }
+            other => panic!("Expected Deny for xargs rm, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_rm_rewrite_find_exec() {
+        let command = "find . -exec rm -rf {} \\;";
+        let result = parse_rm_command_with_trash(command, command, true);
+        match result {
+            RmParseDecision::Rewrite(info) => {
+                let rm_text = &command[info.rm_span.clone()];
+                assert_eq!(rm_text, "rm -rf", "rm_span should cover 'rm -rf', got '{}'", rm_text);
+            }
+            other => panic!("Expected Rewrite for find -exec rm, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_rm_rewrite_xargs() {
+        let command = "ls | xargs rm -rf";
+        let result = parse_rm_command_with_trash(command, command, true);
+        match result {
+            RmParseDecision::Rewrite(info) => {
+                let rm_text = &command[info.rm_span.clone()];
+                assert_eq!(rm_text, "rm -rf", "rm_span should cover 'rm -rf', got '{}'", rm_text);
+            }
+            other => panic!("Expected Rewrite for xargs rm, got {:?}", other),
+        }
     }
 }

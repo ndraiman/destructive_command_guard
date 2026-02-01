@@ -162,8 +162,8 @@ pub use highlight::{
 
 // Re-export trash types for rm-to-trash rewriting
 pub use trash::{
-    RewriteInfo, TrashBinary, TrashDetectionResult, TrashMode, TrashSource, can_safely_rewrite,
-    detect_trash_binary, has_sudo_prefix, rewrite_rm_to_trash,
+    RewriteInfo, TrashBinary, TrashDetectionResult, TrashMode, TrashSource, detect_trash_binary,
+    has_sudo_prefix, rewrite_rm_to_trash,
 };
 
 // Re-export suggestion types

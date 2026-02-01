@@ -280,74 +280,48 @@ pub struct RewriteInfo {
     pub trash_binary: TrashBinary,
 }
 
-/// Rewrite an rm command to use trash.
+/// Rewrite an rm command to use trash via text replacement.
 ///
-/// Returns `None` if the command cannot be safely rewritten (e.g., piped input,
-/// find -exec, xargs).
+/// Replaces the `rm` and its flags (e.g., `rm -rf`) with the trash command,
+/// preserving the rest of the command structure. This enables rewriting
+/// complex commands like `for d in */; do rm -rf "$d"; done`.
 ///
 /// # Arguments
 ///
-/// * `command` - The original rm command
-/// * `paths` - The paths extracted from the rm command
+/// * `command` - The original command
+/// * `rm_span` - Byte range of "rm" and its flags in the original command
+/// * `paths` - The paths extracted from the rm command (for display, may be empty)
 /// * `trash_binary` - The trash binary to use for rewriting
-/// * `has_sudo` - Whether the original command has a sudo prefix
 #[must_use]
 pub fn rewrite_rm_to_trash(
     command: &str,
+    rm_span: std::ops::Range<usize>,
     paths: &[String],
     trash_binary: &TrashBinary,
-    has_sudo: bool,
-) -> Option<RewriteInfo> {
-    // Check for unsafe patterns that can't be safely rewritten
-    if !can_safely_rewrite(command) {
-        return None;
-    }
+) -> RewriteInfo {
+    // Build the trash command string (command + args, no paths)
+    let trash_cmd = if trash_binary.args.is_empty() {
+        trash_binary.command.clone()
+    } else {
+        format!("{} {}", trash_binary.command, trash_binary.args.join(" "))
+    };
 
-    let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-    let rewritten = trash_binary.format_command_with_sudo(&path_refs, has_sudo);
+    // Replace rm+flags with trash command via text substitution
+    let rewritten = format!(
+        "{}{}{}",
+        &command[..rm_span.start],
+        trash_cmd,
+        &command[rm_span.end..]
+    );
 
-    Some(RewriteInfo {
+    RewriteInfo {
         original: command.to_string(),
         rewritten,
         paths: paths.to_vec(),
         trash_binary: trash_binary.clone(),
-    })
+    }
 }
 
-/// Check if an rm command can be safely rewritten to trash.
-///
-/// Commands that cannot be safely rewritten:
-/// - xargs rm
-/// - find -exec rm
-/// - Commands with shell expansion that can't be traced
-#[must_use]
-pub fn can_safely_rewrite(command: &str) -> bool {
-    let lower = command.to_lowercase();
-
-    // xargs patterns - paths come from stdin, can't safely rewrite
-    if lower.contains("xargs") && lower.contains("rm") {
-        return false;
-    }
-
-    // find -exec patterns - paths are dynamically determined
-    if lower.contains("find") && lower.contains("-exec") && lower.contains("rm") {
-        return false;
-    }
-
-    // Subshell expansion with rm
-    if (lower.contains("$(") || lower.contains('`')) && lower.contains("rm") {
-        return false;
-    }
-
-    // Glob in variable that might expand unexpectedly
-    // This is conservative - we allow simple variable expansion like $TMPDIR
-    // but reject patterns that might expand to multiple items in unsafe ways
-    if lower.contains("${") && lower.contains('*') {
-        return false;
-    }
-
-    true
-}
 
 /// Check if command has sudo prefix.
 #[must_use]
@@ -359,22 +333,6 @@ pub fn has_sudo_prefix(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_can_safely_rewrite() {
-        // Safe patterns
-        assert!(can_safely_rewrite("rm -rf /path/to/dir"));
-        assert!(can_safely_rewrite("sudo rm -rf /path/to/dir"));
-        assert!(can_safely_rewrite("rm -rf $TMPDIR/foo"));
-        assert!(can_safely_rewrite("rm -rf dir1 dir2 dir3"));
-
-        // Unsafe patterns
-        assert!(!can_safely_rewrite("find . -name '*.tmp' -exec rm {} \\;"));
-        assert!(!can_safely_rewrite("xargs rm -rf"));
-        assert!(!can_safely_rewrite("ls | xargs rm"));
-        assert!(!can_safely_rewrite("rm -rf $(find . -name '*.tmp')"));
-        assert!(!can_safely_rewrite("rm -rf `find . -name '*.tmp'`"));
-    }
 
     #[test]
     fn test_has_sudo_prefix() {
@@ -419,38 +377,77 @@ mod tests {
             source: TrashSource::PlatformDetection,
         };
 
-        // Basic rewrite
+        // Basic rewrite: "rm -rf" at 0..6
         let info = rewrite_rm_to_trash(
             "rm -rf /path/to/dir",
+            0..6, // "rm -rf"
             &["/path/to/dir".to_string()],
             &bin,
-            false,
-        )
-        .unwrap();
+        );
         assert_eq!(info.rewritten, "trash /path/to/dir");
 
-        // With sudo
+        // With sudo: "rm -rf" at 5..11
         let info = rewrite_rm_to_trash(
             "sudo rm -rf /path/to/dir",
+            5..11, // "rm -rf" (after "sudo ")
             &["/path/to/dir".to_string()],
             &bin,
-            true,
-        )
-        .unwrap();
+        );
         assert_eq!(info.rewritten, "sudo trash /path/to/dir");
 
         // Multiple paths
         let info = rewrite_rm_to_trash(
             "rm -rf a b c",
+            0..6, // "rm -rf"
             &["a".to_string(), "b".to_string(), "c".to_string()],
             &bin,
-            false,
-        )
-        .unwrap();
+        );
         assert_eq!(info.rewritten, "trash a b c");
 
-        // Unsafe pattern - should return None
-        let info = rewrite_rm_to_trash("find . -exec rm {} \\;", &["{}".to_string()], &bin, false);
-        assert!(info.is_none());
+        // For loop - now works with text replacement!
+        let info = rewrite_rm_to_trash(
+            "for d in */; do rm -rf \"$d\"; done",
+            16..22, // "rm -rf" inside the loop
+            &[],
+            &bin,
+        );
+        assert_eq!(info.rewritten, "for d in */; do trash \"$d\"; done");
+
+        // xargs - now works with text replacement!
+        let info = rewrite_rm_to_trash(
+            "ls | xargs rm -rf",
+            11..17, // "rm -rf" after xargs
+            &[],
+            &bin,
+        );
+        assert_eq!(info.rewritten, "ls | xargs trash");
+
+        // find -exec - now works with text replacement!
+        let info = rewrite_rm_to_trash(
+            "find . -exec rm -rf {} \\;",
+            13..19, // "rm -rf" after -exec
+            &[],
+            &bin,
+        );
+        assert_eq!(info.rewritten, "find . -exec trash {} \\;");
+    }
+
+    #[test]
+    fn test_rewrite_with_gio_trash() {
+        let gio = TrashBinary {
+            command: "gio".to_string(),
+            args: vec!["trash".to_string()],
+            description: "test",
+            source: TrashSource::PlatformDetection,
+        };
+
+        // gio trash has args, so the replacement is "gio trash"
+        let info = rewrite_rm_to_trash(
+            "rm -rf /path",
+            0..6,
+            &["/path".to_string()],
+            &gio,
+        );
+        assert_eq!(info.rewritten, "gio trash /path");
     }
 }
