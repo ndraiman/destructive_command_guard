@@ -322,7 +322,6 @@ pub fn rewrite_rm_to_trash(
     }
 }
 
-
 /// Check if command has sudo prefix.
 #[must_use]
 pub fn has_sudo_prefix(command: &str) -> bool {

@@ -96,8 +96,14 @@ const RM_RECURSIVE_FORCE_SUGGESTIONS: &[PatternSuggestion] = &[
         "Safe temp directory deletion (allowed without confirmation)",
     ),
 ];
-use crate::{normalize::NormalizeTokenKind, normalize::tokenize_for_normalization};
+use crate::normalize::{NormalizeTokenKind, tokenize_for_normalization};
 use std::ops::Range;
+
+/// Shell control keywords and commands that start new command contexts.
+/// After these, the next token could be a command like "rm".
+const SHELL_CONTROL_KEYWORDS: &[&str] = &[
+    "do", "then", "else", "elif", "{", "!", "xargs", "-exec", "-execdir",
+];
 
 const RM_RF_ROOT_HOME_NAME: &str = "rm-rf-root-home";
 const RM_RF_ROOT_HOME_REASON: &str = "rm -rf on root or home paths is EXTREMELY DANGEROUS. This command will NOT be executed. Ask the user to run it manually if truly needed.";
@@ -288,8 +294,6 @@ pub(crate) fn parse_rm_command_with_trash(
 
 /// Extract path arguments from an rm command.
 fn extract_rm_paths(command: &str) -> Vec<String> {
-    use crate::normalize::{NormalizeTokenKind, tokenize_for_normalization};
-
     let tokens = tokenize_for_normalization(command);
     let mut paths = Vec::new();
     let mut in_rm = false;
@@ -362,25 +366,17 @@ pub(crate) fn parse_rm_command(command: &str) -> RmParseDecision {
             return parse_rm_segment(command, &tokens, i + 1, current.byte_range.start);
         }
 
-        // Shell control keywords and commands that start new command contexts.
-        // After these, the next word could be a command like "rm".
-        if matches!(
-            text,
-            "do" | "then" | "else" | "elif" | "{" | "!" | "xargs" | "-exec" | "-execdir"
-        ) {
+        // After control keywords, the next token could be a command like "rm"
+        if SHELL_CONTROL_KEYWORDS.contains(&text) {
             i += 1;
             continue;
         }
 
-        // Skip to the next separator or control keyword before scanning for another command word.
+        // Skip to the next separator or control keyword
         i += 1;
         while i < tokens.len() && tokens[i].kind != NormalizeTokenKind::Separator {
-            // Check if this token is a control keyword - if so, break to continue outer loop
-            if let Some(skip_text) = tokens[i].text(command) {
-                if matches!(
-                    skip_text,
-                    "do" | "then" | "else" | "elif" | "{" | "!" | "xargs" | "-exec" | "-execdir"
-                ) {
+            if let Some(t) = tokens[i].text(command) {
+                if SHELL_CONTROL_KEYWORDS.contains(&t) {
                     break;
                 }
             }
